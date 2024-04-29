@@ -32,6 +32,8 @@ const (
 
 var algoFlag *string
 
+var trace bool
+
 // getHashByName maps the hashing algorithm name to the function
 func getHashByName(name string) func() hash.Hash {
 	switch name {
@@ -45,6 +47,16 @@ func getHashByName(name string) func() hash.Hash {
 		return sha512.New
 	default:
 		return nil
+	}
+}
+
+// printTrace writes formatted output to standard error.
+// This function takes as input a format string and a variadic list
+// of interface{} arguments, which can be of any type.
+// It returns the number of bytes written and any write error encountered.
+func printTrace(format string, a ...any) {
+	if trace {
+		fmt.Fprintf(os.Stderr, format, a...)
 	}
 }
 
@@ -65,7 +77,10 @@ func HashFiles(filePaths []string, hashAlgo func() hash.Hash) (string, error) {
 				return err
 			}
 
-			_, err = overallHash.Write([]byte(hex.EncodeToString(hash.Sum(nil))))
+			sum := hex.EncodeToString(hash.Sum(nil))
+			printTrace("-> calc %s:%s\n", file, sum)
+
+			_, err = overallHash.Write([]byte(sum))
 			if err != nil {
 				return err
 			}
@@ -85,6 +100,9 @@ func main() {
 	// define the flags
 	algoFlag = flag.String("a", SHA1, "Hashing algorithm [md5|sha1|sha256|sha512]")
 	versionFlag := flag.Bool("v", false, "Show version information")
+
+	// trace for debug
+	flag.BoolVar(&trace, "trace", false, "Trace the hash files")
 
 	flag.Usage = func() {
 		fmt.Printf("Usage: %s [-a hashing-algorithm] glob-pattern\n", os.Args[0])
