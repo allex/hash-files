@@ -11,9 +11,11 @@ import (
 	"hash"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/allex/calc-hash/helper"
+	"github.com/allex/calc-hash/helper/logging"
 	"github.com/bmatcuk/doublestar/v4"
 )
 
@@ -31,10 +33,6 @@ const (
 	SHA512 = "sha512"
 )
 
-var algoFlag *string
-
-var trace bool
-
 // getHashByName maps the hashing algorithm name to the function
 func getHashByName(name string) func() hash.Hash {
 	switch name {
@@ -51,21 +49,14 @@ func getHashByName(name string) func() hash.Hash {
 	}
 }
 
-// printTrace writes formatted output to standard error.
-func printTrace(format string, a ...any) {
-	if trace {
-		fmt.Fprintf(os.Stderr, format, a...)
+// hashFiles calculates the hash of a given file list
+func hashFiles(filePaths []string, hashAlgo string) (string, error) {
+	hashFunc := getHashByName(hashAlgo)
+	if hashFunc == nil {
+		return "", fmt.Errorf("invalid or unknown hashing algorithm: %s", hashAlgo)
 	}
-}
 
-func printError(msg string) {
-	fmt.Fprint(os.Stderr, msg)
-}
-
-// HashFiles calculates the hash of a given file list
-func HashFiles(filePaths []string, hashAlgo func() hash.Hash) (string, error) {
-	overallHash := hashAlgo()
-
+	overallHash := hashFunc()
 	for _, file := range filePaths {
 		err := func(file string) error {
 			f, err := os.Open(file)
@@ -74,13 +65,14 @@ func HashFiles(filePaths []string, hashAlgo func() hash.Hash) (string, error) {
 			}
 			defer f.Close()
 
-			hash := hashAlgo()
+			hash := hashFunc()
 			if _, err := io.Copy(hash, f); err != nil {
 				return err
 			}
 
 			sum := hex.EncodeToString(hash.Sum(nil))
-			printTrace("-> calc "+helper.ANSI_BOLD_WHITE+"%s"+helper.ANSI_RESET+" - "+helper.ANSI_BOLD_MAGENTA+"%s"+helper.ANSI_RESET+"\n", file, sum)
+
+			logging.Debug(fmt.Sprintf("%s("+helper.ANSI_BOLD_WHITE+"%s"+helper.ANSI_RESET+")"+" => "+helper.ANSI_BOLD_MAGENTA+"%s"+helper.ANSI_RESET+"\n", hashAlgo, file, sum))
 
 			_, err = overallHash.Write([]byte(sum))
 			if err != nil {
@@ -121,13 +113,23 @@ func collectFiles(patterns []string) ([]string, error) {
 	return files, nil
 }
 
+// die prints an error message, optionally shows help, and terminates the program with a specified exit code.
+//
+// Parameters:
+//   - msg: The error message to be displayed.
+//   - ec: The exit code with which the program should terminate.
+func die(msg string, ec int) {
+	logging.Error(msg)
+	os.Exit(ec)
+}
+
 func main() {
 	// define the flags
-	algoFlag = flag.String("a", SHA1, "Hashing algorithm [md5|sha1|sha256|sha512]")
+	algoFlag := flag.String("a", SHA1, "Hashing algorithm [md5|sha1|sha256|sha512]")
 	versionFlag := flag.Bool("v", false, "Show version information")
 
 	// trace for debug
-	flag.BoolVar(&trace, "trace", false, "Trace the hash files")
+	logLevel := flag.String("log-level", "error", "Set the log-level [debug,info,warn,error]")
 
 	flag.Usage = func() {
 		fmt.Printf("Usage: %s [-a hashing-algorithm] glob-pattern\n", os.Args[0])
@@ -139,31 +141,30 @@ func main() {
 
 	// handle version request
 	if *versionFlag {
-		fmt.Printf("calc-hash version: %s (gitCommit: %s, builtTime: %s)\n", appVersion, gitCommit, buildTime)
-		os.Exit(0) // Terminate the program after printing version
+		die(fmt.Sprintf("calc-hash version: %s (gitCommit: %s, builtTime: %s)\n", appVersion, gitCommit, buildTime), 0)
 	}
 
-	hashAlgo := getHashByName(*algoFlag)
-	if hashAlgo == nil {
-		printError(fmt.Sprintf("Invalid or unknown hashing algorithm: %s\n", *algoFlag))
+	if err := logging.SetLogLevel(*logLevel); err != nil {
+		die(err.Error(), 1)
+	}
+
+	globs := flag.Args()
+	if len(globs) == 0 {
 		flag.Usage()
-		os.Exit(1)
+		os.Exit(0)
 	}
 
-	files, err := collectFiles(flag.Args())
+	files, err := collectFiles(globs)
 	if err != nil {
-		printError(err.Error())
-		flag.Usage()
-		os.Exit(1)
+		die(err.Error(), 1)
 	}
 
 	if len(files) == 0 {
-		printTrace("The glob pattern matches empty")
+		logging.Warn(fmt.Sprintf("The glob pattern matches empty: %s\n", strings.Join(globs, ",")))
 	} else {
-		hash, err := HashFiles(files, hashAlgo)
+		hash, err := hashFiles(files, *algoFlag)
 		if err != nil {
-			fmt.Println(err.Error())
-			os.Exit(1)
+			die(err.Error(), 1)
 		}
 		fmt.Println(hash)
 	}
