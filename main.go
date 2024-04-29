@@ -13,6 +13,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/allex/calc-hash/helper"
 	"github.com/bmatcuk/doublestar/v4"
 )
 
@@ -51,13 +52,14 @@ func getHashByName(name string) func() hash.Hash {
 }
 
 // printTrace writes formatted output to standard error.
-// This function takes as input a format string and a variadic list
-// of interface{} arguments, which can be of any type.
-// It returns the number of bytes written and any write error encountered.
 func printTrace(format string, a ...any) {
 	if trace {
 		fmt.Fprintf(os.Stderr, format, a...)
 	}
+}
+
+func printError(msg string) {
+	fmt.Fprint(os.Stderr, msg)
 }
 
 // HashFiles calculates the hash of a given file list
@@ -78,7 +80,7 @@ func HashFiles(filePaths []string, hashAlgo func() hash.Hash) (string, error) {
 			}
 
 			sum := hex.EncodeToString(hash.Sum(nil))
-			printTrace("-> calc %s:%s\n", file, sum)
+			printTrace("-> calc "+helper.ANSI_BOLD_WHITE+"%s"+helper.ANSI_RESET+" - "+helper.ANSI_BOLD_MAGENTA+"%s"+helper.ANSI_RESET+"\n", file, sum)
 
 			_, err = overallHash.Write([]byte(sum))
 			if err != nil {
@@ -94,6 +96,29 @@ func HashFiles(filePaths []string, hashAlgo func() hash.Hash) (string, error) {
 	}
 
 	return hex.EncodeToString(overallHash.Sum(nil)), nil
+}
+
+func collectFiles(patterns []string) ([]string, error) {
+	var files []string
+
+	indexes := map[string]bool{}
+
+	for i := range patterns {
+		matches, err := doublestar.FilepathGlob(patterns[i], doublestar.WithFilesOnly())
+		if err != nil {
+			return nil, fmt.Errorf("error occured while pattern matching: %s", err.Error())
+		}
+
+		// append files with uniq check
+		for _, file := range matches {
+			if find := indexes[file]; !find {
+				files = append(files, file)
+				indexes[file] = true
+			}
+		}
+	}
+
+	return files, nil
 }
 
 func main() {
@@ -118,35 +143,28 @@ func main() {
 		os.Exit(0) // Terminate the program after printing version
 	}
 
-	globPattern := flag.Arg(0)
-
-	if globPattern == "" {
-		flag.Usage()
-		os.Exit(1)
-	}
-
 	hashAlgo := getHashByName(*algoFlag)
 	if hashAlgo == nil {
-		fmt.Printf("Invalid or unknown hashing algorithm: %s\n", *algoFlag)
+		printError(fmt.Sprintf("Invalid or unknown hashing algorithm: %s\n", *algoFlag))
 		flag.Usage()
 		os.Exit(1)
 	}
 
-	matches, err := doublestar.FilepathGlob(globPattern, doublestar.WithFilesOnly())
+	files, err := collectFiles(flag.Args())
 	if err != nil {
-		fmt.Printf("Error occured while pattern matching: %s\n", err.Error())
+		printError(err.Error())
+		flag.Usage()
 		os.Exit(1)
 	}
 
-	sum := ""
-	if len(matches) > 0 {
-		hash, err := HashFiles(matches, hashAlgo)
+	if len(files) == 0 {
+		printTrace("The glob pattern matches empty")
+	} else {
+		hash, err := HashFiles(files, hashAlgo)
 		if err != nil {
-			fmt.Printf("Error computing hash for files %v: %s\n", matches, err.Error())
+			fmt.Println(err.Error())
 			os.Exit(1)
 		}
-		sum = hash
+		fmt.Println(hash)
 	}
-
-	fmt.Println(sum)
 }
